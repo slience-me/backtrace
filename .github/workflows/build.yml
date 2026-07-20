@@ -37,7 +37,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add bk/prefix/*.txt
+          git add bk/prefix/*.txt bk/prefix/*.txt.manifest.json
           if git diff --cached --quiet; then
             echo "无变更，跳过提交。"
           else

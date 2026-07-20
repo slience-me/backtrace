@@ -2,7 +2,10 @@ package backtrace
 
 import (
 	"context"
-	_ "embed"
+	"crypto/sha256"
+	"embed"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +21,7 @@ import (
 )
 
 const (
+	ASNPrefixRegistrySchema     = "backtrace.asn-prefixes/v1"
 	ASNPrefixRegistryRawBaseURL = "https://raw.githubusercontent.com/oneclickvirt/backtrace/main/bk/prefix"
 	ASNPrefixRegistryCDNBaseURL = "https://cdn.spiritlhl.net/" + ASNPrefixRegistryRawBaseURL
 )
@@ -26,8 +30,9 @@ var knownPrefixASNs = []string{"AS23764", "AS4134", "AS4809", "AS4837", "AS58453
 var prefixFragmentPattern = regexp.MustCompile(`^[0-9a-fA-F:]+$`)
 
 type ASNPrefixRegistrySource struct {
-	Name string
-	Base string
+	Name             string
+	Base             string
+	ValidateManifest bool
 }
 
 type ASNPrefixRegistryLoadResult struct {
@@ -39,14 +44,17 @@ type ASNPrefixRegistryLoadResult struct {
 var activeASNPrefixes atomic.Value // stores map[string][]string; maps are immutable after publication
 var refreshASNPrefixesOnce sync.Once
 
+//go:embed prefix/*.txt.manifest.json
+var embeddedPrefixManifestFS embed.FS
+
 func init() {
 	activeASNPrefixes.Store(cloneASNPrefixes(asnPrefixes))
 }
 
 func DefaultASNPrefixRegistrySources() []ASNPrefixRegistrySource {
 	return []ASNPrefixRegistrySource{
-		{Name: "cdn", Base: ASNPrefixRegistryCDNBaseURL},
-		{Name: "raw", Base: ASNPrefixRegistryRawBaseURL},
+		{Name: "cdn", Base: ASNPrefixRegistryCDNBaseURL, ValidateManifest: true},
+		{Name: "raw", Base: ASNPrefixRegistryRawBaseURL, ValidateManifest: true},
 	}
 }
 
@@ -59,7 +67,7 @@ func LoadASNPrefixRegistry(ctx context.Context, client *http.Client, sources []A
 	}
 	var lastErr error
 	for index, source := range sources {
-		prefixes, err := fetchASNPrefixSource(ctx, client, source.Base)
+		prefixes, err := fetchASNPrefixSource(ctx, client, source)
 		if err != nil {
 			lastErr = fmt.Errorf("load %s ASN prefixes: %w", source.Name, err)
 			continue
@@ -68,6 +76,9 @@ func LoadASNPrefixRegistry(ctx context.Context, client *http.Client, sources []A
 	}
 	embedded := cloneASNPrefixes(asnPrefixes)
 	if len(embedded) > 0 {
+		if err := validateEmbeddedPrefixManifests(); err != nil {
+			return ASNPrefixRegistryLoadResult{}, fmt.Errorf("validate embedded ASN prefix manifests: %w", err)
+		}
 		return ASNPrefixRegistryLoadResult{Prefixes: embedded, Source: "embedded", Fallback: true}, nil
 	}
 	if lastErr == nil {
@@ -97,7 +108,16 @@ func StartASNPrefixRefresh() {
 	})
 }
 
-func fetchASNPrefixSource(ctx context.Context, client *http.Client, base string) (map[string][]string, error) {
+type prefixManifest struct {
+	Schema      string `json:"schema"`
+	File        string `json:"file"`
+	Count       int    `json:"count"`
+	SHA256      string `json:"sha256"`
+	GeneratedAt string `json:"generated_at"`
+}
+
+func fetchASNPrefixSource(ctx context.Context, client *http.Client, source ASNPrefixRegistrySource) (map[string][]string, error) {
+	base := source.Base
 	parsed, err := url.Parse(strings.TrimRight(base, "/"))
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Hostname() == "" {
 		return nil, errors.New("invalid ASN prefix source")
@@ -111,27 +131,25 @@ func fetchASNPrefixSource(ctx context.Context, client *http.Client, base string)
 	for _, asn := range knownPrefixASNs {
 		go func(asn string) {
 			endpoint := strings.TrimRight(base, "/") + "/" + strings.ToLower(asn) + ".txt"
-			request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+			var manifestData []byte
+			if source.ValidateManifest {
+				fetchedManifest, fetchErr := fetchPrefixResource(ctx, client, endpoint+".manifest.json")
+				if fetchErr != nil {
+					results <- prefixResult{asn: asn, err: fmt.Errorf("manifest: %w", fetchErr)}
+					return
+				}
+				manifestData = fetchedManifest
+			}
+			data, err := fetchPrefixResource(ctx, client, endpoint)
 			if err != nil {
 				results <- prefixResult{asn: asn, err: err}
 				return
 			}
-			request.Header.Set("Accept", "text/plain")
-			request.Header.Set("User-Agent", "oneclickvirt-backtrace/asn-prefix-registry-v1")
-			response, err := client.Do(request)
-			if err != nil {
-				results <- prefixResult{asn: asn, err: err}
-				return
-			}
-			data, readErr := io.ReadAll(io.LimitReader(response.Body, 4<<20))
-			response.Body.Close()
-			if readErr != nil {
-				results <- prefixResult{asn: asn, err: readErr}
-				return
-			}
-			if response.StatusCode != http.StatusOK {
-				results <- prefixResult{asn: asn, err: fmt.Errorf("HTTP %d", response.StatusCode)}
-				return
+			if source.ValidateManifest {
+				if err := validatePrefixManifest(manifestData, data, strings.ToLower(asn)+".txt"); err != nil {
+					results <- prefixResult{asn: asn, err: err}
+					return
+				}
 			}
 			values, parseErr := parseASNPrefixLines(data)
 			results <- prefixResult{asn: asn, values: values, err: parseErr}
@@ -146,6 +164,88 @@ func fetchASNPrefixSource(ctx context.Context, client *http.Client, base string)
 		result[loaded.asn] = loaded.values
 	}
 	return result, nil
+}
+
+func fetchPrefixResource(ctx context.Context, client *http.Client, endpoint string) ([]byte, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "text/plain, application/json")
+	request.Header.Set("User-Agent", "oneclickvirt-backtrace/asn-prefix-registry-v1")
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 4<<20))
+}
+
+func validatePrefixManifest(data, snapshot []byte, expectedFile string) error {
+	var manifest prefixManifest
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return fmt.Errorf("decode manifest: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("manifest contains trailing JSON")
+	}
+	if manifest.Schema != ASNPrefixRegistrySchema || manifest.File != expectedFile || manifest.Count < 1 {
+		return errors.New("manifest schema, file, or count is invalid")
+	}
+	if _, err := time.Parse(time.RFC3339, manifest.GeneratedAt); err != nil {
+		return fmt.Errorf("manifest generated_at is invalid: %w", err)
+	}
+	hash := sha256.Sum256(snapshot)
+	if !strings.EqualFold(manifest.SHA256, hex.EncodeToString(hash[:])) {
+		return errors.New("manifest SHA-256 does not match snapshot")
+	}
+	values, err := parseASNPrefixLines(snapshot)
+	if err != nil {
+		return err
+	}
+	if len(values) != manifest.Count {
+		return fmt.Errorf("manifest count %d does not match snapshot count %d", manifest.Count, len(values))
+	}
+	return nil
+}
+
+func validateEmbeddedPrefixManifests() error {
+	for _, asn := range knownPrefixASNs {
+		name := strings.ToLower(asn) + ".txt"
+		manifest, err := embeddedPrefixManifestFS.ReadFile("prefix/" + name + ".manifest.json")
+		if err != nil {
+			return err
+		}
+		var snapshot []byte
+		switch asn {
+		case "AS23764":
+			snapshot = []byte(as23764Data)
+		case "AS4134":
+			snapshot = []byte(as4134Data)
+		case "AS4809":
+			snapshot = []byte(as4809Data)
+		case "AS4837":
+			snapshot = []byte(as4837Data)
+		case "AS58453":
+			snapshot = []byte(as58453Data)
+		case "AS58807":
+			snapshot = []byte(as58807Data)
+		case "AS9808":
+			snapshot = []byte(as9808Data)
+		case "AS9929":
+			snapshot = []byte(as9929Data)
+		}
+		if err := validatePrefixManifest(manifest, snapshot, name); err != nil {
+			return fmt.Errorf("%s: %w", asn, err)
+		}
+	}
+	return nil
 }
 
 func parseASNPrefixLines(data []byte) ([]string, error) {

@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -87,15 +89,107 @@ func updatePrefixes(ctx context.Context, client *http.Client, config updateConfi
 		valuesByASN[asn] = values
 	}
 	for _, asn := range knownASNs {
-		if err := writePrefixFile(filepath.Join(config.OutputDir, strings.ToLower(asn)+".txt"), valuesByASN[asn]); err != nil {
+		path := filepath.Join(config.OutputDir, strings.ToLower(asn)+".txt")
+		if err := writePrefixFile(path, valuesByASN[asn]); err != nil {
 			if errors.Is(err, errPrefixCountDrop) {
 				fmt.Fprintf(os.Stderr, "skip %s: %v\n", asn, err)
-				continue
+				current, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				valuesByASN[asn] = prefixValuesFromFile(current)
+			} else {
+				return err
 			}
+		}
+		if err := writePrefixManifest(path); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+type prefixManifest struct {
+	Schema      string `json:"schema"`
+	File        string `json:"file"`
+	Count       int    `json:"count"`
+	SHA256      string `json:"sha256"`
+	GeneratedAt string `json:"generated_at"`
+}
+
+func prefixValuesFromFile(data []byte) []string {
+	values := make([]string, 0)
+	for _, line := range strings.Split(string(data), "\n") {
+		if value := strings.TrimSpace(line); value != "" {
+			values = append(values, value)
+		}
+	}
+	return values
+}
+
+func writePrefixManifest(snapshotPath string) error {
+	snapshot, err := os.ReadFile(snapshotPath)
+	if err != nil {
+		return err
+	}
+	values := prefixValuesFromFile(snapshot)
+	if len(values) == 0 {
+		return errors.New("prefix snapshot is empty")
+	}
+	hash := sha256.Sum256(snapshot)
+	fileName := filepath.Base(snapshotPath)
+	sha256Value := hex.EncodeToString(hash[:])
+	manifestPath := snapshotPath + ".manifest.json"
+	if current, readErr := os.ReadFile(manifestPath); readErr == nil {
+		var existing prefixManifest
+		decoder := json.NewDecoder(bytes.NewReader(current))
+		decoder.DisallowUnknownFields()
+		var extra any
+		if decoder.Decode(&existing) == nil && decoder.Decode(&extra) == io.EOF &&
+			existing.Schema == "backtrace.asn-prefixes/v1" && existing.File == fileName &&
+			existing.Count == len(values) && strings.EqualFold(existing.SHA256, sha256Value) {
+			if _, timeErr := time.Parse(time.RFC3339, existing.GeneratedAt); timeErr == nil {
+				return nil
+			}
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return readErr
+	}
+	manifest := prefixManifest{Schema: "backtrace.asn-prefixes/v1", File: fileName, Count: len(values), SHA256: sha256Value, GeneratedAt: time.Now().UTC().Format(time.RFC3339)}
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return writeAtomicFile(manifestPath, data)
+}
+
+func writeAtomicFile(output string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(output), ".prefix-manifest-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer os.Remove(temporaryName)
+	if err := temporary.Chmod(0o644); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryName, output)
 }
 
 func extractIPv6Prefixes(data []byte) ([]string, error) {
