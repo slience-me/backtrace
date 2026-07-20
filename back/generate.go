@@ -1,30 +1,72 @@
 package backtrace
 
 import (
+	"errors"
+	"fmt"
 	"net"
 )
 
-// GeneratePrefixList 生成指定前缀的IP地址列表
+const defaultPrefixListLimit = 1 << 16
+
+var (
+	ErrInvalidPrefix         = errors.New("invalid IPv4 prefix")
+	ErrIPv6PrefixUnsupported = errors.New("IPv6 prefix generation is unsupported")
+	ErrPrefixListTooLarge    = errors.New("prefix list exceeds limit")
+)
+
+// GeneratePrefixList generates the legacy list of /24 address prefixes.  The
+// old API cannot return an error, so invalid, IPv6, and over-sized inputs
+// return nil.  Callers that need to distinguish these cases should use
+// GeneratePrefixListWithLimit.
 func GeneratePrefixList(prefix string) []string {
-	// 解析CIDR表示法的IP地址
-	_, ipNet, err := net.ParseCIDR(prefix)
+	result, err := GeneratePrefixListWithLimit(prefix, defaultPrefixListLimit)
 	if err != nil {
 		return nil
 	}
-	// 获取IP地址的32位整数表示
-	ip := ipNet.IP.To4()
-	start := binaryIPToInt(ip)
-	maskSize, _ := ipNet.Mask.Size()
-	end := start | (1<<(32-maskSize) - 1)
-	// 生成IP地址列表
-	var prefixList []string
-	for i := start; i <= end; i++ {
-		if (i-start)%256 == 0 {
-			tempText := intToBinaryIP(i).String()
-			prefixList = append(prefixList, tempText[:len(tempText)-2])
-		}
+	return result
+}
+
+// GeneratePrefixListWithLimit generates one entry for every /24-sized block
+// covered by an IPv4 CIDR.  Prefixes narrower than /24 are rejected once the
+// number of blocks exceeds maxEntries; this keeps /0 and similarly broad
+// input from allocating or iterating unbounded data.  A prefix longer than
+// /24 still produces the containing block, preserving the legacy behaviour.
+func GeneratePrefixListWithLimit(prefix string, maxEntries int) ([]string, error) {
+	if maxEntries <= 0 {
+		maxEntries = defaultPrefixListLimit
 	}
-	return prefixList
+	_, ipNet, err := net.ParseCIDR(prefix)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidPrefix, prefix)
+	}
+	maskSize, bits := ipNet.Mask.Size()
+	if bits == 128 {
+		return nil, fmt.Errorf("%w: %q", ErrIPv6PrefixUnsupported, prefix)
+	}
+	if bits != 32 || maskSize < 0 || maskSize > 32 || ipNet.IP.To4() == nil {
+		return nil, fmt.Errorf("%w: %q", ErrInvalidPrefix, prefix)
+	}
+
+	// A /24 block is the output unit used by the original implementation.  A
+	// /25-/32 prefix therefore has one containing block, while a /0 would need
+	// 2^24 entries and is rejected before allocation.
+	blocks := uint64(1)
+	if maskSize < 24 {
+		blocks = uint64(1) << uint(24-maskSize)
+	}
+	if blocks > uint64(maxEntries) {
+		return nil, fmt.Errorf("%w: %d entries (limit %d)", ErrPrefixListTooLarge, blocks, maxEntries)
+	}
+
+	start := binaryIPToInt(ipNet.IP.To4()) &^ uint32(255)
+	result := make([]string, 0, int(blocks))
+	for index := uint64(0); index < blocks; index++ {
+		// The arithmetic is bounded by 2^24 blocks, so this multiplication and
+		// addition cannot overflow uint32 for a valid IPv4 network.
+		value := start + uint32(index*256)
+		result = append(result, fmt.Sprintf("%d.%d.%d", byte(value>>24), byte(value>>16), byte(value>>8)))
+	}
+	return result, nil
 }
 
 // 将IP地址转换为32位整数
