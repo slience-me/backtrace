@@ -1,8 +1,9 @@
 package backtrace
 
 import (
-	"strings"
 	_ "embed"
+	"net/netip"
+	"strings"
 )
 
 //go:embed prefix/as4809.txt
@@ -44,10 +45,18 @@ var asnPrefixes = map[string][]string{
 // 判断 IPv6 地址是否匹配 ASN 中的某个前缀
 func ipv6Asn(ip string) string {
 	ip = strings.ToLower(ip)
-	for asn, prefixes := range asnPrefixes {
+	for asn, prefixes := range currentASNPrefixes() {
 		for _, prefix := range prefixes {
 			prefix = strings.TrimSpace(prefix)
 			if prefix == "" {
+				continue
+			}
+			if strings.Contains(prefix, "/") {
+				address, addressErr := netip.ParseAddr(ip)
+				network, networkErr := netip.ParsePrefix(prefix)
+				if addressErr == nil && networkErr == nil && network.Contains(address) {
+					return asn
+				}
 				continue
 			}
 			if strings.HasPrefix(ip, prefix) {

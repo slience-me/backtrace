@@ -80,11 +80,11 @@ func getData(endpoint string) string {
 		InitLogger()
 		defer Logger.Sync()
 	}
-	
+
 	// 先测试CDN可用性
 	testUrl := "https://raw.githubusercontent.com/spiritLHLS/ecs/main/back/test"
 	cdnUrl := checkCdn(testUrl)
-	
+
 	// 如果有可用的CDN，使用CDN获取数据
 	if cdnUrl != "" {
 		url := cdnUrl + endpoint
@@ -106,7 +106,7 @@ func getData(endpoint string) string {
 			Logger.Info(fmt.Sprintf("CDN request failed: %v", err))
 		}
 	}
-	
+
 	// CDN不可用，尝试直连
 	if model.EnableLoger {
 		Logger.Info(fmt.Sprintf("Trying direct connection: %s", endpoint))

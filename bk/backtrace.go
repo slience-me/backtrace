@@ -16,6 +16,7 @@ func safeTraceCall(fn func()) {
 }
 
 func BackTrace(enableIpv6 bool) string {
+	StartASNPrefixRefresh()
 	if model.CachedIcmpData == "" || model.ParsedIcmpTargets == nil || time.Since(model.CachedIcmpDataFetchTime) > time.Hour {
 		model.CachedIcmpData = getData(model.IcmpTargets)
 		model.CachedIcmpDataFetchTime = time.Now()

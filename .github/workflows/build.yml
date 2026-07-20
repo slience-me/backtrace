@@ -3,10 +3,17 @@ name: 创建IPv6检测的前缀
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0'
+    - cron: '0 0 * * *'
+
+concurrency:
+  group: backtrace-ipv6-prefix-sync
+  cancel-in-progress: false
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: write
 
 jobs:
   fetch-ipv6-prefixes:
@@ -17,26 +24,14 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: 设置 Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
       - name: 获取并处理多个ASN的IPv6前缀
         run: |
-          mkdir -p bk/prefix/
-          for asn in AS4809 AS4134 AS9929 AS4837 AS58807 AS9808 AS58453 AS23764; do
-            echo "处理 $asn..."
-            curl -s -A "Mozilla/5.0" \
-                 "https://bgp.he.net/$asn" > "${asn}.html"
-            grep -oE '[0-9a-f:]+::/[0-9]+' "${asn}.html" | sort -u > tmp_prefixes.txt
-            {
-              while read prefix; do
-                ip_part=$(echo "$prefix" | cut -d/ -f1)
-                prefix_len=$(echo "$prefix" | cut -d/ -f2)
-                keep_segments=$((prefix_len / 16))
-                segments=$(echo "$ip_part" | tr ':' '\n' | grep -v '^$')
-                kept=$(echo "$segments" | head -n "$keep_segments" | tr '\n' ':' | sed 's/:$//')
-                echo "$kept"
-              done < tmp_prefixes.txt
-            } | sort -u > "bk/prefix/${asn,,}.txt"
-            rm -f "${asn}.html" tmp_prefixes.txt
-          done
+          go run ./cmd/update-prefixes -output-dir bk/prefix
 
       - name: 提交更新到仓库
         run: |

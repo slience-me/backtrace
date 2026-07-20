@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
@@ -32,6 +34,32 @@ type ConcurrentResults struct {
 	// backtraceError  error
 }
 
+type cliOptions struct {
+	showVersion bool
+	showIPInfo  bool
+	help        bool
+	ipv6        bool
+	jsonOutput  bool
+	deep        bool
+	specifiedIP string
+	timeout     time.Duration
+}
+
+func newBacktraceFlagSet(options *cliOptions) *flag.FlagSet {
+	set := flag.NewFlagSet("backtrace", flag.ContinueOnError)
+	set.BoolVar(&options.help, "h", false, "Show help information")
+	set.BoolVar(&options.showVersion, "v", false, "Show version")
+	set.BoolVar(&options.showIPInfo, "s", true, "Disabe show ip info")
+	set.BoolVar(&model.EnableLoger, "log", false, "Enable logging")
+	set.BoolVar(&options.ipv6, "ipv6", false, "Enable ipv6 testing")
+	set.StringVar(&options.specifiedIP, "ip", "", "Specify IP address for bgptools")
+	set.BoolVar(&options.jsonOutput, "json", false, "Output structured RDAP/BGP report as JSON")
+	set.BoolVar(&options.jsonOutput, "structured", false, "Alias for -json")
+	set.BoolVar(&options.deep, "deep", false, "Fetch geofeed and enable WHOIS fallback")
+	set.DurationVar(&options.timeout, "timeout", 15*time.Second, "Structured report timeout")
+	return set
+}
+
 func safeGo(wg *sync.WaitGroup, fn func()) {
 	go func() {
 		defer wg.Done()
@@ -50,28 +78,44 @@ func main() {
 			resp.Body.Close()
 		}
 	}()
-	fmt.Println(Green("Repo:"), Yellow("https://github.com/oneclickvirt/backtrace"))
-	var showVersion, showIpInfo, help, ipv6 bool
-	var specifiedIP string
-	backtraceFlag := flag.NewFlagSet("backtrace", flag.ContinueOnError)
-	backtraceFlag.BoolVar(&help, "h", false, "Show help information")
-	backtraceFlag.BoolVar(&showVersion, "v", false, "Show version")
-	backtraceFlag.BoolVar(&showIpInfo, "s", true, "Disabe show ip info")
-	backtraceFlag.BoolVar(&model.EnableLoger, "log", false, "Enable logging")
-	backtraceFlag.BoolVar(&ipv6, "ipv6", false, "Enable ipv6 testing")
-	backtraceFlag.StringVar(&specifiedIP, "ip", "", "Specify IP address for bgptools")
-	backtraceFlag.Parse(os.Args[1:])
-	if help {
+	var options cliOptions
+	backtraceFlag := newBacktraceFlagSet(&options)
+	if err := backtraceFlag.Parse(os.Args[1:]); err != nil {
+		os.Exit(2)
+	}
+	if !options.jsonOutput {
+		fmt.Println(Green("Repo:"), Yellow("https://github.com/oneclickvirt/backtrace"))
+	}
+	if options.help {
 		fmt.Printf("Usage: %s [options]\n", os.Args[0])
 		backtraceFlag.PrintDefaults()
 		return
 	}
-	if showVersion {
+	if options.showVersion {
 		fmt.Println(model.BackTraceVersion)
 		return
 	}
+	if err := validateStructuredOptions(options); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if options.jsonOutput {
+		config := bgptools.IPBGPReportConfig{
+			Timeout:             options.timeout,
+			FetchGeofeed:        options.deep,
+			EnableWHOISFallback: options.deep,
+			ResolveASN: func(ctx context.Context, ip string) (string, error) {
+				return bgptools.ResolveOriginASNWithConfig(ctx, ip, bgptools.OriginASNConfig{Timeout: options.timeout})
+			},
+		}
+		if err := writeStructuredReport(context.Background(), os.Stdout, options.specifiedIP, config, bgptools.QueryIPBGPReport); err != nil {
+			fmt.Fprintf(os.Stderr, "structured report failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	info := IpInfo{}
-	if showIpInfo {
+	if options.showIPInfo {
 		rsp, err := http.Get("http://ipinfo.io")
 		if err != nil {
 			fmt.Printf("get ip info err %v \n", err.Error())
@@ -98,7 +142,7 @@ func main() {
 	var useIPv6 bool
 	switch preCheck.StackType {
 	case "DualStack":
-		useIPv6 = ipv6
+		useIPv6 = options.ipv6
 	case "IPv4":
 		useIPv6 = false
 	case "IPv6":
@@ -114,8 +158,8 @@ func main() {
 	results := ConcurrentResults{}
 	var wg sync.WaitGroup
 	var targetIP string
-	if specifiedIP != "" {
-		targetIP = specifiedIP
+	if options.specifiedIP != "" {
+		targetIP = options.specifiedIP
 	} else if info.Ip != "" {
 		targetIP = info.Ip
 	}
@@ -153,4 +197,30 @@ func main() {
 		fmt.Println("Press Enter to exit...")
 		fmt.Scanln()
 	}
+}
+
+func validateStructuredOptions(options cliOptions) error {
+	if options.deep && !options.jsonOutput {
+		return fmt.Errorf("-deep requires -json or -structured")
+	}
+	if !options.jsonOutput {
+		return nil
+	}
+	if options.specifiedIP == "" {
+		return fmt.Errorf("structured report requires -ip")
+	}
+	if options.timeout <= 0 {
+		return fmt.Errorf("structured report timeout must be positive")
+	}
+	return nil
+}
+
+func writeStructuredReport(ctx context.Context, output io.Writer, ip string, config bgptools.IPBGPReportConfig, query func(context.Context, string, bgptools.IPBGPReportConfig) (*bgptools.IPBGPReport, error)) error {
+	report, err := query(ctx, ip, config)
+	if err != nil {
+		return err
+	}
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
 }
