@@ -1,0 +1,7 @@
+{
+  "schema": "backtrace.asn-metadata-manifest/v1",
+  "file": "bgp-asn-map.json",
+  "count": 84,
+  "sha256": "f681dd78d55c27d4615d2e705de9bde24d111e8897d37a489b91e263f27f1a66",
+  "generated_at": "2026-07-21T15:33:49.459211Z"
+}

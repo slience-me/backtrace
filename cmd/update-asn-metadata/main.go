@@ -3,6 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,6 +26,14 @@ type document struct {
 	Schema      string                 `json:"schema"`
 	GeneratedAt time.Time              `json:"generated_at"`
 	Entries     []bgptools.ASNMetadata `json:"entries"`
+}
+
+type manifest struct {
+	Schema      string    `json:"schema"`
+	File        string    `json:"file"`
+	Count       int       `json:"count"`
+	SHA256      string    `json:"sha256"`
+	GeneratedAt time.Time `json:"generated_at"`
 }
 
 func main() {
@@ -106,7 +116,7 @@ func updateSnapshot(path string, entries []bgptools.ASNMetadata, minimum int) er
 		return fmt.Errorf("ASN count dropped from %d to %d", len(current.Entries), len(entries))
 	}
 	if sameEntries(current.Entries, entries) && !current.GeneratedAt.IsZero() {
-		return nil
+		return writeManifest(path, currentData, len(current.Entries))
 	}
 	next, err := json.MarshalIndent(document{Schema: bgptools.ASNMetadataSchema, GeneratedAt: time.Now().UTC(), Entries: entries}, "", "  ")
 	if err != nil {
@@ -120,6 +130,52 @@ func updateSnapshot(path string, entries []bgptools.ASNMetadata, minimum int) er
 	name := temporary.Name()
 	defer os.Remove(name)
 	if _, err := temporary.Write(next); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Chmod(0o644); err != nil {
+		temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	return writeManifest(path, next, len(entries))
+}
+
+func writeManifest(snapshotPath string, snapshot []byte, count int) error {
+	var snapshotDocument document
+	if err := json.Unmarshal(snapshot, &snapshotDocument); err != nil {
+		return err
+	}
+	hash := sha256.Sum256(snapshot)
+	value := manifest{
+		Schema: bgptools.ASNMetadataManifestSchema, File: filepath.Base(snapshotPath), Count: count,
+		SHA256: hex.EncodeToString(hash[:]), GeneratedAt: snapshotDocument.GeneratedAt,
+	}
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	manifestPath := strings.TrimSuffix(snapshotPath, ".json") + ".manifest.json"
+	if current, readErr := os.ReadFile(manifestPath); readErr == nil && string(current) == string(data) {
+		return nil
+	}
+	return writeAtomic(manifestPath, data)
+}
+
+func writeAtomic(path string, data []byte) error {
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".asn-metadata-manifest-*.json")
+	if err != nil {
+		return err
+	}
+	name := temporary.Name()
+	defer os.Remove(name)
+	if _, err := temporary.Write(data); err != nil {
 		temporary.Close()
 		return err
 	}

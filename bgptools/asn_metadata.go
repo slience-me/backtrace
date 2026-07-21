@@ -2,7 +2,9 @@ package bgptools
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,8 +17,9 @@ import (
 )
 
 const (
-	ASNMetadataSchema  = "backtrace.asn-metadata/v1"
-	ASNMetadataMinimum = 50
+	ASNMetadataSchema         = "backtrace.asn-metadata/v1"
+	ASNMetadataManifestSchema = "backtrace.asn-metadata-manifest/v1"
+	ASNMetadataMinimum        = 50
 )
 
 var asnMetadataSnapshotURLs = []string{
@@ -26,6 +29,9 @@ var asnMetadataSnapshotURLs = []string{
 
 //go:embed data/bgp-asn-map.json
 var embeddedASNMetadata []byte
+
+//go:embed data/bgp-asn-map.manifest.json
+var embeddedASNMetadataManifest []byte
 
 type ASNMetadata struct {
 	ASN  uint32 `json:"asn"`
@@ -46,11 +52,19 @@ type asnMetadataDocument struct {
 	Entries     []ASNMetadata `json:"entries"`
 }
 
+type asnMetadataManifest struct {
+	Schema      string    `json:"schema"`
+	File        string    `json:"file"`
+	Count       int       `json:"count"`
+	SHA256      string    `json:"sha256"`
+	GeneratedAt time.Time `json:"generated_at"`
+}
+
 // LoadASNMetadata prefers the component's validated remote snapshot and
 // falls back to the compile-time snapshot. Upstream registry URLs and parsing
 // rules are intentionally not exposed to callers.
 func LoadASNMetadata(ctx context.Context, client *http.Client) ([]ASNMetadata, ASNMetadataSource, error) {
-	return loadASNMetadata(ctx, client, asnMetadataSnapshotURLs, embeddedASNMetadata, ASNMetadataMinimum)
+	return loadASNMetadata(ctx, client, asnMetadataSnapshotURLs, embeddedASNMetadata, embeddedASNMetadataManifest, ASNMetadataMinimum)
 }
 
 // EmbeddedASNMetadata returns the validated compile-time snapshot without
@@ -59,6 +73,9 @@ func EmbeddedASNMetadata() ([]ASNMetadata, ASNMetadataSource, error) {
 	entries, generatedAt, err := parseASNMetadataDocument(embeddedASNMetadata, ASNMetadataMinimum)
 	if err != nil {
 		return nil, ASNMetadataSource{}, err
+	}
+	if err := validateASNMetadataManifest(embeddedASNMetadataManifest, embeddedASNMetadata, len(entries), generatedAt); err != nil {
+		return nil, ASNMetadataSource{}, fmt.Errorf("validate embedded ASN metadata manifest: %w", err)
 	}
 	return entries, ASNMetadataSource{Schema: ASNMetadataSchema, Count: len(entries), GeneratedAt: generatedAt, Source: "embedded", Fallback: true}, nil
 }
@@ -81,7 +98,7 @@ func LookupASNMetadata(ctx context.Context, client *http.Client, asn string) (AS
 	return entries[index], source, true, nil
 }
 
-func loadASNMetadata(ctx context.Context, client *http.Client, urls []string, embedded []byte, minimum int) ([]ASNMetadata, ASNMetadataSource, error) {
+func loadASNMetadata(ctx context.Context, client *http.Client, urls []string, embedded, embeddedManifest []byte, minimum int) ([]ASNMetadata, ASNMetadataSource, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -89,21 +106,63 @@ func loadASNMetadata(ctx context.Context, client *http.Client, urls []string, em
 	if err != nil {
 		return nil, ASNMetadataSource{}, fmt.Errorf("invalid embedded ASN metadata: %w", err)
 	}
+	if err := validateASNMetadataManifest(embeddedManifest, embedded, len(embeddedEntries), embeddedAt); err != nil {
+		return nil, ASNMetadataSource{}, fmt.Errorf("invalid embedded ASN metadata manifest: %w", err)
+	}
 	if client == nil {
 		client = &http.Client{Timeout: 6 * time.Second}
 	}
 	minimumRemote := max(minimum, len(embeddedEntries)*65/100)
-	for _, snapshotURL := range urls {
+	for index, snapshotURL := range urls {
+		manifest, fetchErr := fetchASNMetadata(ctx, client, asnMetadataManifestURL(snapshotURL))
+		if fetchErr != nil {
+			continue
+		}
 		data, fetchErr := fetchASNMetadata(ctx, client, snapshotURL)
 		if fetchErr != nil {
 			continue
 		}
 		entries, generatedAt, parseErr := parseASNMetadataDocument(data, minimumRemote)
-		if parseErr == nil {
-			return entries, ASNMetadataSource{Schema: ASNMetadataSchema, Count: len(entries), GeneratedAt: generatedAt, Source: "remote"}, nil
+		if parseErr == nil && validateASNMetadataManifest(manifest, data, len(entries), generatedAt) == nil {
+			return entries, ASNMetadataSource{Schema: ASNMetadataSchema, Count: len(entries), GeneratedAt: generatedAt, Source: metadataRemoteSource(index), Fallback: index > 0}, nil
 		}
 	}
 	return embeddedEntries, ASNMetadataSource{Schema: ASNMetadataSchema, Count: len(embeddedEntries), GeneratedAt: embeddedAt, Source: "embedded", Fallback: true}, nil
+}
+
+func metadataRemoteSource(index int) string {
+	if index == 0 {
+		return "cdn"
+	}
+	if index == 1 {
+		return "raw"
+	}
+	return "remote"
+}
+
+func asnMetadataManifestURL(snapshotURL string) string {
+	return strings.TrimSuffix(snapshotURL, ".json") + ".manifest.json"
+}
+
+func validateASNMetadataManifest(data, snapshot []byte, count int, generatedAt time.Time) error {
+	var manifest asnMetadataManifest
+	decoder := json.NewDecoder(strings.NewReader(string(data)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return fmt.Errorf("decode manifest: %w", err)
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		return errors.New("manifest contains trailing JSON")
+	}
+	if manifest.Schema != ASNMetadataManifestSchema || manifest.File != "bgp-asn-map.json" || manifest.Count != count || manifest.GeneratedAt.IsZero() || !manifest.GeneratedAt.Equal(generatedAt) {
+		return errors.New("manifest schema, file, count, or generated_at is invalid")
+	}
+	hash := sha256.Sum256(snapshot)
+	if !strings.EqualFold(manifest.SHA256, hex.EncodeToString(hash[:])) {
+		return errors.New("manifest SHA-256 does not match snapshot")
+	}
+	return nil
 }
 
 func fetchASNMetadata(ctx context.Context, client *http.Client, snapshotURL string) ([]byte, error) {

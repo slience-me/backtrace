@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const BackTraceVersion = "v0.0.14"
+const BackTraceVersion = "v0.0.15"
 
 var EnableLoger = false
 
