@@ -4,6 +4,18 @@ on:
   schedule:
     - cron: "29 3 * * *"
   workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/sync-asn-metadata.yml"
+      - "cmd/update-asn-metadata/**"
+      - "bgptools/data/**"
+      - "bgptools/asn_metadata.go"
+      - "bgptools/asn_metadata_test.go"
+      - "model/model.go"
+      - "go.mod"
+      - "go.sum"
 
 concurrency:
   group: backtrace-asn-metadata-sync
