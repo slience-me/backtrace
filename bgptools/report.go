@@ -217,6 +217,12 @@ func QueryIPBGPReport(parent context.Context, ip string, cfg IPBGPReportConfig) 
 		geofeedURLs = append(geofeedURLs, report.WHOIS.GeofeedURLs...)
 	}
 	geofeedURLs = uniqueSortedStrings(geofeedURLs)
+	if report.RDAP != nil {
+		report.RDAP.GeofeedURLs = sanitizeReportURLs(report.RDAP.GeofeedURLs)
+	}
+	if report.WHOIS != nil {
+		report.WHOIS.GeofeedURLs = sanitizeReportURLs(report.WHOIS.GeofeedURLs)
+	}
 	for _, geofeedURL := range geofeedURLs {
 		if !cfg.FetchGeofeed {
 			report.Geofeeds = append(report.Geofeeds, GeofeedResult{URL: geofeedURL, Status: ReportUnsupported, Error: "fetch disabled"})
@@ -224,7 +230,7 @@ func QueryIPBGPReport(parent context.Context, ip string, cfg IPBGPReportConfig) 
 		}
 		result := fetchGeofeed(ctx, geofeedURL, cfg)
 		report.Geofeeds = append(report.Geofeeds, result)
-		report.Sources = append(report.Sources, IPBGPSourceStatus{Source: "geofeed:" + geofeedURL, Status: result.Status, Error: result.Error})
+		report.Sources = append(report.Sources, IPBGPSourceStatus{Source: "geofeed", Status: result.Status, Error: result.Error})
 	}
 
 	asn := strings.TrimSpace(cfg.ASN)
@@ -286,7 +292,7 @@ func inferRIR(record RDAPRecord, available bool) RIRInfo {
 }
 
 func fetchGeofeed(parent context.Context, rawURL string, cfg IPBGPReportConfig) GeofeedResult {
-	result := GeofeedResult{URL: rawURL}
+	result := GeofeedResult{URL: sanitizeReportURL(rawURL)}
 	u, err := url.Parse(rawURL)
 	if err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		result.Status = ReportUnsupported
@@ -310,7 +316,7 @@ func fetchGeofeed(parent context.Context, rawURL string, cfg IPBGPReportConfig) 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		result.Status = ReportError
-		result.Error = err.Error()
+		result.Error = stableReportError(result.Status, err)
 		return result
 	}
 	req.Header.Set("Accept", "text/csv, text/plain, */*")
@@ -318,7 +324,7 @@ func fetchGeofeed(parent context.Context, rawURL string, cfg IPBGPReportConfig) 
 	resp, err := client.Do(req)
 	if err != nil {
 		result.Status = reportStatusForError(err)
-		result.Error = err.Error()
+		result.Error = stableReportError(result.Status, err)
 		return result
 	}
 	defer resp.Body.Close()
@@ -341,7 +347,7 @@ func fetchGeofeed(parent context.Context, rawURL string, cfg IPBGPReportConfig) 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
 	if err != nil {
 		result.Status = reportStatusForError(err)
-		result.Error = err.Error()
+		result.Error = stableReportError(result.Status, err)
 		return result
 	}
 	if int64(len(body)) > maxBytes {
@@ -517,9 +523,49 @@ func rirNameFromText(value string) string {
 func sourceStatusForError(source string, status ReportStatus, err error) IPBGPSourceStatus {
 	item := IPBGPSourceStatus{Source: source, Status: status}
 	if err != nil {
-		item.Error = err.Error()
+		item.Error = stableReportError(status, err)
 	}
 	return item
+}
+
+func stableReportError(status ReportStatus, err error) string {
+	if errors.Is(err, context.Canceled) {
+		return "canceled"
+	}
+	switch status {
+	case ReportRateLimited:
+		return "rate_limited"
+	case ReportTimeout:
+		return "timeout"
+	case ReportUnsupported:
+		return "unsupported"
+	case ReportMissingFields:
+		return "missing_fields"
+	default:
+		return "request_failed"
+	}
+}
+
+func sanitizeReportURL(raw string) string {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return ""
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.ForceQuery = false
+	parsed.Fragment = ""
+	return parsed.String()
+}
+
+func sanitizeReportURLs(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if sanitized := sanitizeReportURL(value); sanitized != "" {
+			result = append(result, sanitized)
+		}
+	}
+	return uniqueSortedStrings(result)
 }
 
 func reportStatusForError(err error) ReportStatus {

@@ -131,7 +131,7 @@ func QueryASNRelationships(ctx context.Context, asn string, cfg RelationshipConf
 	report := &ASNRelationshipReport{TargetASN: normalized}
 	ripeURL, err := addQuery(cfg.RIPEstatURL, "resource", normalized)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid relationship source configuration")
 	}
 	ripeRaw, ripeStatus, ripeErr := fetchRelationshipJSON(ctx, cfg, "ripestat", ripeURL)
 	report.SourceStatuses = append(report.SourceStatuses, sourceStatus("ripestat", ripeStatus, ripeErr))
@@ -153,7 +153,7 @@ func QueryASNRelationships(ctx context.Context, asn string, cfg RelationshipConf
 
 	peeringURL, err := addQuery(cfg.PeeringDBURL, "asn", normalized)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("invalid relationship source configuration")
 	}
 	peeringRaw, peeringStatus, peeringErr := fetchRelationshipJSON(ctx, cfg, "peeringdb", peeringURL)
 	report.SourceStatuses = append(report.SourceStatuses, sourceStatus("peeringdb", peeringStatus, peeringErr))
@@ -255,7 +255,16 @@ func sourceStatus(source string, status RelationshipStatus, err error) Relations
 		Timeout:     status == RelationshipTimeout,
 	}
 	if err != nil {
-		item.Error = err.Error()
+		switch status {
+		case RelationshipRateLimited:
+			item.Error = "rate_limited"
+		case RelationshipTimeout:
+			item.Error = "timeout"
+		case RelationshipMissingFields:
+			item.Error = "missing_fields"
+		default:
+			item.Error = "request_failed"
+		}
 	}
 	return item
 }

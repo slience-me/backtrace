@@ -128,7 +128,7 @@ func parseRDAPRecord(ip, source string, data []byte) (RDAPRecord, error) {
 	record := RDAPRecord{
 		IP: ip, Handle: payload.Handle, Name: payload.Name, Type: payload.Type,
 		Country: payload.Country, StartAddress: payload.StartAddress, EndAddress: payload.EndAddress,
-		ParentHandle: payload.ParentHandle, Port43: payload.Port43, Status: payload.Status, Source: source,
+		ParentHandle: payload.ParentHandle, Port43: payload.Port43, Status: payload.Status, Source: "rdap",
 	}
 	for _, event := range payload.Events {
 		switch strings.ToLower(event.Action) {
