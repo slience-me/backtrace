@@ -53,19 +53,22 @@ func ResolveOriginASNWithConfig(parent context.Context, ip string, config Origin
 	}
 	requestURL, err := addQuery(config.BaseURL, "resource", parsed.String())
 	if err != nil {
-		return "", err
+		return "", errors.New("invalid origin ASN source")
 	}
 	ctx, cancel := context.WithTimeout(parent, config.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return "", err
+		return "", errors.New("create origin ASN request failed")
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "oneclickvirt-backtrace-origin-asn/1")
 	response, err := config.Client.Do(req)
 	if err != nil {
-		return "", err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", ctxErr
+		}
+		return "", errors.New("origin ASN request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusTooManyRequests {
@@ -76,7 +79,7 @@ func ResolveOriginASNWithConfig(parent context.Context, ip string, config Origin
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, config.MaxResponseSize+1))
 	if err != nil {
-		return "", err
+		return "", errors.New("origin ASN response read failed")
 	}
 	if int64(len(body)) > config.MaxResponseSize {
 		return "", fmt.Errorf("origin ASN response exceeds %d bytes", config.MaxResponseSize)

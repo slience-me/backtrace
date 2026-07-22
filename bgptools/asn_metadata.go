@@ -168,13 +168,16 @@ func validateASNMetadataManifest(data, snapshot []byte, count int, generatedAt t
 func fetchASNMetadata(ctx context.Context, client *http.Client, snapshotURL string) ([]byte, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, snapshotURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, errors.New("create ASN metadata request failed")
 	}
 	request.Header.Set("Accept", "application/json")
 	request.Header.Set("User-Agent", "oneclickvirt-backtrace-asn-metadata/1")
 	response, err := client.Do(request)
 	if err != nil {
-		return nil, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
+		return nil, errors.New("ASN metadata request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
@@ -183,7 +186,7 @@ func fetchASNMetadata(ctx context.Context, client *http.Client, snapshotURL stri
 	const maximumSize = 4 << 20
 	data, err := io.ReadAll(io.LimitReader(response.Body, maximumSize+1))
 	if err != nil {
-		return nil, err
+		return nil, errors.New("ASN metadata response read failed")
 	}
 	if len(data) > maximumSize {
 		return nil, fmt.Errorf("ASN metadata exceeds %d bytes", maximumSize)

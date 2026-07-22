@@ -96,7 +96,7 @@ func main() {
 		return
 	}
 	if err := validateStructuredOptions(options); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		fmt.Fprintln(os.Stderr, sanitizeErrorText(err.Error()))
 		os.Exit(2)
 	}
 	if options.jsonOutput {
@@ -109,7 +109,7 @@ func main() {
 			},
 		}
 		if err := writeStructuredReport(context.Background(), os.Stdout, options.specifiedIP, config, bgptools.QueryIPBGPReport); err != nil {
-			fmt.Fprintf(os.Stderr, "structured report failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "structured report failed: %s\n", sanitizeErrorText(err.Error()))
 			os.Exit(1)
 		}
 		return
@@ -118,12 +118,12 @@ func main() {
 	if options.showIPInfo {
 		rsp, err := http.Get("http://ipinfo.io")
 		if err != nil {
-			fmt.Printf("get ip info err %v \n", err.Error())
+			fmt.Printf("get ip info err %s \n", sanitizeErrorText(err.Error()))
 		} else {
 			defer rsp.Body.Close()
 			err = json.NewDecoder(rsp.Body).Decode(&info)
 			if err != nil {
-				fmt.Printf("json decode err %v \n", err.Error())
+				fmt.Printf("json decode err %s \n", sanitizeErrorText(err.Error()))
 			} else {
 				fmt.Println(Green("国家: ") + White(info.Country) + Green(" 城市: ") + White(info.City) +
 					Green(" 服务商: ") + Blue(info.Org))
@@ -186,10 +186,10 @@ func main() {
 	})
 	wg.Wait()
 	if results.bgpResult != "" {
-		fmt.Print(results.bgpResult)
+		fmt.Print(indentLegacyOutput(results.bgpResult))
 	}
 	if results.backtraceResult != "" {
-		fmt.Printf("%s\n", results.backtraceResult)
+		fmt.Printf("%s\n", indentLegacyOutput(results.backtraceResult))
 	}
 	fmt.Println(Yellow("准确线路自行查看详细路由，本测试结果仅作参考"))
 	fmt.Println(Yellow("同一目标地址多个线路时，检测可能已越过汇聚层，除第一个线路外，后续信息可能无效"))

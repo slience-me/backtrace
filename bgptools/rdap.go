@@ -60,13 +60,16 @@ func QueryRDAP(ctx context.Context, ip string, client *http.Client, baseURL stri
 	requestURL := strings.TrimRight(baseURL, "/") + "/" + parsed.String()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, requestURL, nil)
 	if err != nil {
-		return RDAPRecord{}, err
+		return RDAPRecord{}, errors.New("create RDAP request failed")
 	}
 	req.Header.Set("Accept", "application/rdap+json, application/json")
 	req.Header.Set("User-Agent", "oneclickvirt-backtrace-rdap/1")
 	response, err := client.Do(req)
 	if err != nil {
-		return RDAPRecord{}, err
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return RDAPRecord{}, ctxErr
+		}
+		return RDAPRecord{}, errors.New("RDAP request failed")
 	}
 	defer response.Body.Close()
 	if response.StatusCode == http.StatusTooManyRequests {
@@ -77,7 +80,7 @@ func QueryRDAP(ctx context.Context, ip string, client *http.Client, baseURL stri
 	}
 	data, err := io.ReadAll(io.LimitReader(response.Body, (4<<20)+1))
 	if err != nil {
-		return RDAPRecord{}, err
+		return RDAPRecord{}, errors.New("RDAP response read failed")
 	}
 	if len(data) > 4<<20 {
 		return RDAPRecord{}, ErrRDAPResponseTooLarge
