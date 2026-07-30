@@ -40,7 +40,9 @@ type cliOptions struct {
 	help        bool
 	ipv6        bool
 	jsonOutput  bool
+	routeJSON   bool
 	deep        bool
+	routeTries  int
 	specifiedIP string
 	timeout     time.Duration
 }
@@ -55,8 +57,10 @@ func newBacktraceFlagSet(options *cliOptions) *flag.FlagSet {
 	set.StringVar(&options.specifiedIP, "ip", "", "Specify IP address for bgptools")
 	set.BoolVar(&options.jsonOutput, "json", false, "Output structured RDAP/BGP report as JSON")
 	set.BoolVar(&options.jsonOutput, "structured", false, "Alias for -json")
+	set.BoolVar(&options.routeJSON, "route-json", false, "Output structured return-route report as JSON")
 	set.BoolVar(&options.deep, "deep", false, "Fetch geofeed and enable WHOIS fallback")
-	set.DurationVar(&options.timeout, "timeout", 15*time.Second, "Structured report timeout")
+	set.IntVar(&options.routeTries, "route-attempts", 3, "Traceroute attempts per target (1-5)")
+	set.DurationVar(&options.timeout, "timeout", 15*time.Second, "Structured or route report timeout")
 	return set
 }
 
@@ -83,7 +87,7 @@ func main() {
 	if err := backtraceFlag.Parse(os.Args[1:]); err != nil {
 		os.Exit(2)
 	}
-	if !options.jsonOutput {
+	if !options.jsonOutput && !options.routeJSON {
 		fmt.Println(Green("Repo:"), Yellow("https://github.com/oneclickvirt/backtrace"))
 	}
 	if options.help {
@@ -110,6 +114,18 @@ func main() {
 		}
 		if err := writeStructuredReport(context.Background(), os.Stdout, options.specifiedIP, config, bgptools.QueryIPBGPReport); err != nil {
 			fmt.Fprintf(os.Stderr, "structured report failed: %s\n", sanitizeErrorText(err.Error()))
+			os.Exit(1)
+		}
+		return
+	}
+	if options.routeJSON {
+		report := backtrace.RunRouteReport(context.Background(), backtrace.RouteReportConfig{
+			EnableIPv6: options.ipv6,
+			Attempts:   options.routeTries,
+			Timeout:    options.timeout,
+		})
+		if err := writeStructuredRouteReport(os.Stdout, report); err != nil {
+			fmt.Fprintf(os.Stderr, "route report failed: %s\n", sanitizeErrorText(err.Error()))
 			os.Exit(1)
 		}
 		return
@@ -200,8 +216,20 @@ func main() {
 }
 
 func validateStructuredOptions(options cliOptions) error {
+	if options.jsonOutput && options.routeJSON {
+		return fmt.Errorf("-json and -route-json are mutually exclusive")
+	}
 	if options.deep && !options.jsonOutput {
 		return fmt.Errorf("-deep requires -json or -structured")
+	}
+	if options.routeJSON {
+		if options.timeout <= 0 {
+			return fmt.Errorf("route report timeout must be positive")
+		}
+		if options.routeTries < 1 || options.routeTries > 5 {
+			return fmt.Errorf("route attempts must be between 1 and 5")
+		}
+		return nil
 	}
 	if !options.jsonOutput {
 		return nil
@@ -213,6 +241,12 @@ func validateStructuredOptions(options cliOptions) error {
 		return fmt.Errorf("structured report timeout must be positive")
 	}
 	return nil
+}
+
+func writeStructuredRouteReport(output io.Writer, report backtrace.RouteReport) error {
+	encoder := json.NewEncoder(output)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(report)
 }
 
 func writeStructuredReport(ctx context.Context, output io.Writer, ip string, config bgptools.IPBGPReportConfig, query func(context.Context, string, bgptools.IPBGPReportConfig) (*bgptools.IPBGPReport, error)) error {

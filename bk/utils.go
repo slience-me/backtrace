@@ -1,6 +1,7 @@
 package backtrace
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -35,32 +36,43 @@ func removeDuplicates(elements []string) []string {
 
 // checkCdn 检查CDN可用性，参考shell脚本的测试逻辑
 func checkCdn(testUrl string) string {
+	return checkCdnContext(context.Background(), testUrl)
+}
+
+func checkCdnContext(ctx context.Context, testUrl string) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := req.C()
 	client.SetTimeout(6 * time.Second)
 	if model.EnableLoger {
 		InitLogger()
 		defer Logger.Sync()
 	}
-	for _, cdnUrl := range model.CdnList {
+	for index, cdnUrl := range model.CdnList {
 		url := cdnUrl + testUrl
 		if model.EnableLoger {
-			Logger.Info(fmt.Sprintf("Testing CDN: %s", url))
+			Logger.Info(fmt.Sprintf("Testing CDN source %d", index+1))
 		}
-		resp, err := client.R().Get(url)
+		resp, err := client.R().SetContext(ctx).Get(url)
 		if err == nil && resp != nil && resp.Body != nil {
 			b, err := io.ReadAll(resp.Body)
 			resp.Body.Close()
 			if err == nil && strings.Contains(string(b), "success") {
 				if model.EnableLoger {
-					Logger.Info(fmt.Sprintf("CDN available: %s", cdnUrl))
+					Logger.Info(fmt.Sprintf("CDN source %d available", index+1))
 				}
 				return cdnUrl
 			}
 		}
 		if model.EnableLoger {
-			Logger.Info(fmt.Sprintf("CDN test failed: %s, error: %v", cdnUrl, err))
+			Logger.Info(fmt.Sprintf("CDN source %d unavailable", index+1))
 		}
-		time.Sleep(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ""
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
 	if model.EnableLoger {
 		Logger.Info("No CDN available, using direct connection")
@@ -70,12 +82,15 @@ func checkCdn(testUrl string) string {
 
 // getData 获取目标地址的文本内容
 func getData(endpoint string) string {
+	return getDataContext(context.Background(), endpoint)
+}
+
+func getDataContext(ctx context.Context, endpoint string) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	client := req.C()
 	client.SetTimeout(6 * time.Second)
-	client.R().
-		SetRetryCount(2).
-		SetRetryBackoffInterval(1*time.Second, 5*time.Second).
-		SetRetryFixedInterval(2 * time.Second)
 	if model.EnableLoger {
 		InitLogger()
 		defer Logger.Sync()
@@ -83,15 +98,19 @@ func getData(endpoint string) string {
 
 	// 先测试CDN可用性
 	testUrl := "https://raw.githubusercontent.com/spiritLHLS/ecs/main/back/test"
-	cdnUrl := checkCdn(testUrl)
+	cdnUrl := checkCdnContext(ctx, testUrl)
 
 	// 如果有可用的CDN，使用CDN获取数据
 	if cdnUrl != "" {
 		url := cdnUrl + endpoint
 		if model.EnableLoger {
-			Logger.Info(fmt.Sprintf("Using CDN: %s", url))
+			Logger.Info("Using validated CDN source")
 		}
-		resp, err := client.R().Get(url)
+		resp, err := client.R().
+			SetContext(ctx).
+			SetRetryCount(2).
+			SetRetryFixedInterval(2 * time.Second).
+			Get(url)
 		if err == nil && resp != nil && resp.Body != nil {
 			defer resp.Body.Close()
 			b, err := io.ReadAll(resp.Body)
@@ -103,15 +122,19 @@ func getData(endpoint string) string {
 			}
 		}
 		if model.EnableLoger {
-			Logger.Info(fmt.Sprintf("CDN request failed: %v", err))
+			Logger.Info("CDN data request failed")
 		}
 	}
 
 	// CDN不可用，尝试直连
 	if model.EnableLoger {
-		Logger.Info(fmt.Sprintf("Trying direct connection: %s", endpoint))
+		Logger.Info("Trying direct data source")
 	}
-	resp, err := client.R().Get(endpoint)
+	resp, err := client.R().
+		SetContext(ctx).
+		SetRetryCount(2).
+		SetRetryFixedInterval(2 * time.Second).
+		Get(endpoint)
 	if err == nil && resp != nil && resp.Body != nil {
 		defer resp.Body.Close()
 		b, err := io.ReadAll(resp.Body)
@@ -123,7 +146,7 @@ func getData(endpoint string) string {
 		}
 	}
 	if model.EnableLoger {
-		Logger.Info(fmt.Sprintf("Direct connection failed: %v", err))
+		Logger.Info("Direct data request failed")
 	}
 	return ""
 }

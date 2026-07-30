@@ -26,7 +26,7 @@ const (
 	ASNPrefixRegistryCDNBaseURL = "https://cdn.spiritlhl.net/" + ASNPrefixRegistryRawBaseURL
 )
 
-var knownPrefixASNs = []string{"AS23764", "AS4134", "AS4809", "AS4837", "AS58453", "AS58807", "AS9808", "AS9929"}
+var knownPrefixASNs = []string{"AS10099", "AS23764", "AS4134", "AS4809", "AS4837", "AS58453", "AS58807", "AS9808", "AS9929"}
 var prefixFragmentPattern = regexp.MustCompile(`^[0-9a-fA-F:]+$`)
 
 type ASNPrefixRegistrySource struct {
@@ -226,6 +226,8 @@ func validateEmbeddedPrefixManifests() error {
 		switch asn {
 		case "AS23764":
 			snapshot = []byte(as23764Data)
+		case "AS10099":
+			snapshot = []byte(as10099Data)
 		case "AS4134":
 			snapshot = []byte(as4134Data)
 		case "AS4809":

@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-const BackTraceVersion = "v0.0.17"
+const BackTraceVersion = "v0.0.18"
 
 var EnableLoger = false
 
@@ -68,6 +68,7 @@ var (
 		"AS4809":  "电信CN2    [优质线路]",
 		"AS4134":  "电信163    [普通线路]",
 		"AS9929":  "联通9929   [优质线路]",
+		"AS10099": "联通CUG    [优质线路]",
 		"AS4837":  "联通4837   [普通线路]",
 		"AS58807": "移动CMIN2  [精品线路]",
 		"AS9808":  "移动CMI    [普通线路]",

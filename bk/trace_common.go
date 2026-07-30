@@ -544,6 +544,15 @@ func (h *Hop) Add(r *Reply) *Node {
 
 // Trace is a simple traceroute tool using DefaultTracer.
 func Trace(ip net.IP) ([]*Hop, error) {
+	return TraceContext(context.Background(), ip)
+}
+
+// TraceContext runs an ICMP traceroute that stops promptly when the caller's
+// context is canceled.
+func TraceContext(ctx context.Context, ip net.IP) ([]*Hop, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	hops := make([]*Hop, 0, DefaultTracer.MaxHops)
 	touch := func(dist int) *Hop {
 		for _, h := range hops {
@@ -555,7 +564,7 @@ func Trace(ip net.IP) ([]*Hop, error) {
 		hops = append(hops, h)
 		return h
 	}
-	err := DefaultTracer.Trace(context.Background(), ip, func(r *Reply) {
+	err := DefaultTracer.Trace(ctx, ip, func(r *Reply) {
 		touch(r.Hops).Add(r)
 	})
 	if err != nil && err != context.DeadlineExceeded {

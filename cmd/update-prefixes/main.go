@@ -20,7 +20,7 @@ import (
 	"time"
 )
 
-var knownASNs = []string{"AS23764", "AS4134", "AS4809", "AS4837", "AS58453", "AS58807", "AS9808", "AS9929"}
+var knownASNs = []string{"AS10099", "AS23764", "AS4134", "AS4809", "AS4837", "AS58453", "AS58807", "AS9808", "AS9929"}
 var errPrefixCountDrop = errors.New("prefix count dropped beyond protection threshold")
 
 type updateConfig struct {

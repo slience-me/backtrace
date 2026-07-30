@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/oneclickvirt/backtrace/bgptools"
+	backtrace "github.com/oneclickvirt/backtrace/bk"
 )
 
 func TestBacktraceStructuredFlagParsing(t *testing.T) {
@@ -26,8 +27,50 @@ func TestBacktraceDefaultsPreserveLegacyMode(t *testing.T) {
 	if err := newBacktraceFlagSet(&options).Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	if !options.showIPInfo || options.jsonOutput || options.deep || options.ipv6 || options.specifiedIP != "" || options.timeout != 15*time.Second {
+	if !options.showIPInfo || options.jsonOutput || options.routeJSON || options.deep || options.ipv6 || options.specifiedIP != "" || options.timeout != 15*time.Second || options.routeTries != 3 {
 		t.Fatalf("legacy defaults changed: %+v", options)
+	}
+}
+
+func TestBacktraceRouteStructuredFlagParsing(t *testing.T) {
+	var options cliOptions
+	set := newBacktraceFlagSet(&options)
+	if err := set.Parse([]string{"-route-json", "-ipv6", "-route-attempts", "4", "-timeout", "9s"}); err != nil {
+		t.Fatal(err)
+	}
+	if !options.routeJSON || !options.ipv6 || options.routeTries != 4 || options.timeout != 9*time.Second {
+		t.Fatalf("unexpected route options: %+v", options)
+	}
+	if err := validateStructuredOptions(options); err != nil {
+		t.Fatalf("valid route options rejected: %v", err)
+	}
+}
+
+func TestValidateRouteStructuredOptions(t *testing.T) {
+	for _, options := range []cliOptions{
+		{jsonOutput: true, routeJSON: true, timeout: time.Second, routeTries: 3},
+		{routeJSON: true, timeout: 0, routeTries: 3},
+		{routeJSON: true, timeout: time.Second, routeTries: 0},
+		{routeJSON: true, timeout: time.Second, routeTries: 6},
+	} {
+		if err := validateStructuredOptions(options); err == nil {
+			t.Fatalf("expected invalid route options: %+v", options)
+		}
+	}
+}
+
+func TestWriteStructuredRouteReportKeepsStdoutJSONOnly(t *testing.T) {
+	var output bytes.Buffer
+	report := backtrace.RouteReport{SchemaVersion: backtrace.RouteReportSchema, Targets: []backtrace.RouteTargetReport{}}
+	if err := writeStructuredRouteReport(&output, report); err != nil {
+		t.Fatal(err)
+	}
+	var decoded backtrace.RouteReport
+	if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+		t.Fatalf("stdout is not route JSON: %v (%q)", err, output.String())
+	}
+	if decoded.SchemaVersion != backtrace.RouteReportSchema {
+		t.Fatalf("unexpected route report: %+v", decoded)
 	}
 }
 
