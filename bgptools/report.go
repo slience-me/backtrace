@@ -46,10 +46,10 @@ type RIRInfo struct {
 	Status ReportStatus `json:"status"`
 }
 
-// GeofeedResult contains an RDAP/WHOIS geofeed URL and, when requested, the
-// bounded fetch result.  The payload itself is not retained in the report.
+// GeofeedResult contains the bounded fetch result. URL remains internal so
+// reports expose the probe outcome without disclosing the service location.
 type GeofeedResult struct {
-	URL        string       `json:"url"`
+	URL        string       `json:"-"`
 	Status     ReportStatus `json:"status"`
 	HTTPStatus int          `json:"http_status,omitempty"`
 	Bytes      int64        `json:"bytes,omitempty"`
@@ -59,11 +59,11 @@ type GeofeedResult struct {
 // WHOISRecord is the small, structured subset used when RDAP is unavailable
 // or missing required fields.  Raw port-43 text is never returned.
 type WHOISRecord struct {
-	Server           string       `json:"server"`
+	Server           string       `json:"-"`
 	Status           ReportStatus `json:"status"`
 	Prefixes         []string     `json:"prefixes,omitempty"`
 	RegistrationDate *time.Time   `json:"registration_date,omitempty"`
-	GeofeedURLs      []string     `json:"geofeed_urls,omitempty"`
+	GeofeedURLs      []string     `json:"-"`
 	RIR              RIRInfo      `json:"rir"`
 }
 

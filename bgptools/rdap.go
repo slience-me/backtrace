@@ -36,9 +36,9 @@ type RDAPRecord struct {
 	Prefixes         []string     `json:"prefixes,omitempty"`
 	RegistrationDate *time.Time   `json:"registration_date,omitempty"`
 	LastChangedDate  *time.Time   `json:"last_changed_date,omitempty"`
-	GeofeedURLs      []string     `json:"geofeed_urls,omitempty"`
+	GeofeedURLs      []string     `json:"-"`
 	Entities         []RDAPEntity `json:"entities,omitempty"`
-	Port43           string       `json:"port43,omitempty"`
+	Port43           string       `json:"-"`
 	Status           []string     `json:"status,omitempty"`
 	Source           string       `json:"source"`
 }

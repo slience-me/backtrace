@@ -54,13 +54,13 @@ func TestStructuredReportErrorsDoNotExposeRemoteURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, forbidden := range []string{"token=", "key=", "secret", "userinfo@"} {
+	for _, forbidden := range []string{"private.example", "token=", "key=", "secret", "userinfo@", `"geofeed_urls"`, `"port43"`, `"server"`, `"url"`} {
 		if strings.Contains(string(encoded), forbidden) {
 			t.Fatalf("structured report leaked %q: %s", forbidden, encoded)
 		}
 	}
-	if report.RDAP == nil || len(report.RDAP.GeofeedURLs) != 1 || report.RDAP.GeofeedURLs[0] != "https://private.example/geofeed" || report.Geofeeds[0].URL != "https://private.example/geofeed" {
-		t.Fatalf("geofeed URL was not sanitized consistently: %+v", report)
+	if report.RDAP == nil || len(report.RDAP.GeofeedURLs) != 1 || report.Geofeeds[0].Status != ReportError {
+		t.Fatalf("internal geofeed processing was not preserved: %+v", report)
 	}
 }
 
@@ -93,5 +93,40 @@ func TestRemoteFetchErrorsDoNotExposeSourceURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestStructuredReportOmitsServiceLocationsButKeepsProbeEvidence(t *testing.T) {
+	report := IPBGPReport{
+		Status: ReportPartial,
+		RDAP: &RDAPRecord{
+			Port43:      "whois.private.example:43",
+			GeofeedURLs: []string{"https://private.example/rdap-geofeed.csv"},
+		},
+		WHOIS: &WHOISRecord{
+			Server:      "whois.private.example:43",
+			Status:      ReportAvailable,
+			GeofeedURLs: []string{"https://private.example/whois-geofeed.csv"},
+		},
+		Geofeeds: []GeofeedResult{{
+			URL:        "https://private.example/geofeed.csv",
+			Status:     ReportAvailable,
+			HTTPStatus: http.StatusOK,
+			Bytes:      128,
+		}},
+	}
+	encoded, err := json.Marshal(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"private.example", "whois.private", `"geofeed_urls"`, `"port43"`, `"server"`, `"url"`} {
+		if strings.Contains(string(encoded), forbidden) {
+			t.Fatalf("structured report leaked %q: %s", forbidden, encoded)
+		}
+	}
+	for _, expected := range []string{`"status":"available"`, `"http_status":200`, `"bytes":128`} {
+		if !strings.Contains(string(encoded), expected) {
+			t.Fatalf("structured report lost probe evidence %q: %s", expected, encoded)
+		}
 	}
 }
