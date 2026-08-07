@@ -39,7 +39,8 @@ func TestRunRouteReportOfflineFixture(t *testing.T) {
 	if target.Classification.Code != "ct_cn2_gia" || target.Latency.Samples != 6 || target.Latency.P95MS != 30 {
 		t.Fatalf("unexpected route classification or latency: %+v", target)
 	}
-	if strings.Contains(RenderRouteReport(report), "P95") || !strings.Contains(RenderRouteReport(report), "电信CN2GIA") {
+	rendered := RenderRouteReport(report)
+	if strings.Contains(rendered, "P95") || !strings.Contains(rendered, "电信CN2GT") || !strings.Contains(rendered, "电信163") {
 		t.Fatalf("legacy rendering is not compact: %q", RenderRouteReport(report))
 	}
 }
@@ -85,6 +86,55 @@ func TestRenderRouteReportPreservesLegacyAddressWidths(t *testing.T) {
 	}
 	if !strings.Contains(rendered, "北京电信v6 2400:89c0:1053:3::69     电信163") {
 		t.Fatalf("IPv6 legacy spacing changed: %q", rendered)
+	}
+}
+
+func TestRenderRouteReportUsesClassicASNLabels(t *testing.T) {
+	report := RouteReport{Targets: []RouteTargetReport{
+		{
+			Target:         RouteTarget{Name: "北京电信v4", Address: "219.141.140.10", IPVersion: "v4", Carrier: "CT"},
+			Status:         RouteProbeAvailable,
+			ObservedASNs:   []string{"AS6453", "AS4134"},
+			Classification: inconclusiveClassification("ct_destination_only", "仅见电信目的网", "only one AS4134 hop"),
+		},
+		{
+			Target:         RouteTarget{Name: "上海电信v4", Address: "202.96.209.133", IPVersion: "v4", Carrier: "CT"},
+			Status:         RouteProbeAvailable,
+			ObservedASNs:   []string{"AS4809", "AS4134"},
+			Classification: RouteClassification{Code: "ct_cn2_mixed", Label: "电信CN2混合 [优质线路]", Confidence: routeConfidenceMixed, Rank: 3},
+		},
+		{
+			Target:         RouteTarget{Name: "广州联通v4", Address: "210.21.196.6", IPVersion: "v4", Carrier: "CU"},
+			Status:         RouteProbeAvailable,
+			ObservedASNs:   []string{"AS4837"},
+			Classification: inconclusiveClassification("cu_destination_only", "仅见联通目的网", "only one AS4837 hop"),
+		},
+	}}
+	rendered := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(RenderRouteReport(report), "")
+	for _, want := range []string{
+		"北京电信v4 219.141.140.10  电信163    [普通线路]",
+		"上海电信v4 202.96.209.133  电信CN2GT  [优质线路] 电信163    [普通线路]",
+		"广州联通v4 210.21.196.6    联通4837   [普通线路]",
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("classic route label missing %q from %q", want, rendered)
+		}
+	}
+	if strings.Contains(rendered, "仅见") || strings.Contains(rendered, "未见") {
+		t.Fatalf("structured fallback label leaked into classic output: %q", rendered)
+	}
+}
+
+func TestRenderRouteReportUsesClassicUnknownMessage(t *testing.T) {
+	report := RouteReport{Targets: []RouteTargetReport{{
+		Target:         RouteTarget{Name: "北京电信v4", Address: "219.141.140.10", IPVersion: "v4", Carrier: "CT"},
+		Status:         RouteProbeAvailable,
+		ObservedASNs:   []string{"AS6453"},
+		Classification: inconclusiveClassification("ct_unknown", "未见电信骨干", "known carrier ASNs are absent"),
+	}}}
+	rendered := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(RenderRouteReport(report), "")
+	if !strings.Contains(rendered, "检测不到已知线路的ASN") || strings.Contains(rendered, "未见电信骨干") {
+		t.Fatalf("unexpected classic unknown route output: %q", rendered)
 	}
 }
 
