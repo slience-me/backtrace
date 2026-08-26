@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/oneclickvirt/backtrace/bgptools"
 	backtrace "github.com/oneclickvirt/backtrace/bk"
+	"github.com/oneclickvirt/backtrace/utils"
+	"github.com/oneclickvirt/basics/network/resolver"
 )
 
 func TestBacktraceStructuredFlagParsing(t *testing.T) {
@@ -27,8 +30,111 @@ func TestBacktraceDefaultsPreserveLegacyMode(t *testing.T) {
 	if err := newBacktraceFlagSet(&options).Parse(nil); err != nil {
 		t.Fatal(err)
 	}
-	if !options.showIPInfo || options.jsonOutput || options.routeJSON || options.deep || options.ipv6 || options.specifiedIP != "" || options.timeout != 15*time.Second || options.routeTries != 3 {
+	if !options.showIPInfo || options.jsonOutput || options.routeJSON || options.deep || options.ipv6 || options.specifiedIP != "" || options.dnsMode != "auto" || options.timeout != 15*time.Second || options.routeTries != 3 {
 		t.Fatalf("legacy defaults changed: %+v", options)
+	}
+}
+
+func TestBacktraceDNSModeParsing(t *testing.T) {
+	var options cliOptions
+	if err := newBacktraceFlagSet(&options).Parse([]string{"-dns-mode", "DoT"}); err != nil {
+		t.Fatal(err)
+	}
+	options.dnsMode = strings.ToLower(strings.TrimSpace(options.dnsMode))
+	if options.dnsMode != "dot" {
+		t.Fatalf("dns mode = %q, want dot", options.dnsMode)
+	}
+}
+
+func TestConfigureBacktraceResolverScopesBootstrapFallback(t *testing.T) {
+	originalConfigure := backtraceDNSConfigureFn
+	originalShutdown := backtraceDNSShutdownFn
+	originalBootstrapReachable := backtraceDNSBootstrapReachableFn
+	t.Cleanup(func() {
+		backtraceDNSConfigureFn = originalConfigure
+		backtraceDNSShutdownFn = originalShutdown
+		backtraceDNSBootstrapReachableFn = originalBootstrapReachable
+	})
+	tests := []struct {
+		name               string
+		mode               resolver.Mode
+		connected          bool
+		bootstrapReachable bool
+		configuredStatus   resolver.Status
+		wantConfigure      int
+		wantBootstrap      int
+		wantShutdown       int
+	}{
+		{
+			name:             "connected auto uses normal resolver path",
+			mode:             resolver.ModeAuto,
+			connected:        true,
+			configuredStatus: resolver.Status{Requested: resolver.ModeAuto, Active: resolver.ModeSystem, SystemAvailable: true},
+			wantConfigure:    1,
+		},
+		{
+			name:          "offline auto stops when bootstrap is unreachable",
+			mode:          resolver.ModeAuto,
+			wantBootstrap: 1,
+			wantShutdown:  1,
+		},
+		{
+			name:               "offline auto retries after reachable bootstrap",
+			mode:               resolver.ModeAuto,
+			bootstrapReachable: true,
+			configuredStatus:   resolver.Status{Requested: resolver.ModeAuto, Active: resolver.ModeDoH, DoHAvailable: true, Fallback: true, Stack: "IPv4"},
+			wantConfigure:      1,
+			wantBootstrap:      1,
+		},
+		{
+			name:             "forced DoH bypasses bootstrap gate",
+			mode:             resolver.ModeDoH,
+			configuredStatus: resolver.Status{Requested: resolver.ModeDoH, Active: resolver.ModeDoH, DoHAvailable: true},
+			wantConfigure:    1,
+		},
+		{
+			name:         "system mode never falls back",
+			mode:         resolver.ModeSystem,
+			wantShutdown: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			configureCalls := 0
+			bootstrapCalls := 0
+			shutdownCalls := 0
+			backtraceDNSConfigureFn = func(_ context.Context, config resolver.Config) resolver.Status {
+				configureCalls++
+				if config.Mode != test.mode {
+					t.Fatalf("resolver mode = %q, want %q", config.Mode, test.mode)
+				}
+				return test.configuredStatus
+			}
+			backtraceDNSBootstrapReachableFn = func(_ context.Context, config resolver.Config) (string, bool) {
+				bootstrapCalls++
+				if config.Mode != resolver.ModeAuto {
+					t.Fatalf("bootstrap mode = %q, want auto", config.Mode)
+				}
+				return "IPv4", test.bootstrapReachable
+			}
+			backtraceDNSShutdownFn = func() { shutdownCalls++ }
+
+			status := configureBacktraceResolver(context.Background(), test.mode, &utils.NetCheckResult{Connected: test.connected})
+			if configureCalls != test.wantConfigure || bootstrapCalls != test.wantBootstrap || shutdownCalls != test.wantShutdown {
+				t.Fatalf("DNS calls = configure:%d bootstrap:%d shutdown:%d, want configure:%d bootstrap:%d shutdown:%d", configureCalls, bootstrapCalls, shutdownCalls, test.wantConfigure, test.wantBootstrap, test.wantShutdown)
+			}
+			if test.wantConfigure == 0 && status.Active != resolver.ModeUnavailable {
+				t.Fatalf("status = %#v, want unavailable", status)
+			}
+		})
+	}
+}
+
+func TestPromoteEncryptedDNSConnectivity(t *testing.T) {
+	preCheck := &utils.NetCheckResult{StackType: "None"}
+	promoteEncryptedDNSConnectivity(preCheck, resolver.Status{Active: resolver.ModeDoT, Stack: "IPv6"})
+	if !preCheck.Connected || !preCheck.HasIPv6 || preCheck.HasIPv4 || preCheck.StackType != "IPv6" {
+		t.Fatalf("successful encrypted DNS did not promote network state: %#v", preCheck)
 	}
 }
 

@@ -34,13 +34,16 @@ case $os in
   Linux)
     case $arch in
       "x86_64" | "x86" | "amd64" | "x64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-linux-amd64"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-linux-amd64"
         ;;
       "i386" | "i686")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-linux-386"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-linux-386"
         ;;
-      "armv7l" | "armv8" | "armv8l" | "aarch64" | "arm64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-linux-arm64"
+      "armv7l" | "armv8" | "armv8l")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-linux-arm"
+        ;;
+      "aarch64" | "arm64")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-linux-arm64"
         ;;
       *)
         echo "Unsupported architecture: $arch"
@@ -51,13 +54,13 @@ case $os in
   Darwin)
     case $arch in
       "x86_64" | "x86" | "amd64" | "x64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-darwin-amd64"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-darwin-amd64"
         ;;
       "i386" | "i686")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-darwin-386"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-darwin-386"
         ;;
-      "armv7l" | "armv8" | "armv8l" | "aarch64" | "arm64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-darwin-arm64"
+      "aarch64" | "arm64")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-darwin-arm64"
         ;;
       *)
         echo "Unsupported architecture: $arch"
@@ -68,13 +71,16 @@ case $os in
   FreeBSD)
     case $arch in
       amd64)
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-freebsd-amd64"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-freebsd-amd64"
         ;;
       "i386" | "i686")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-freebsd-386"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-freebsd-386"
         ;;
-      "armv7l" | "armv8" | "armv8l" | "aarch64" | "arm64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-freebsd-arm64"
+      "armv7l" | "armv8" | "armv8l")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-freebsd-arm"
+        ;;
+      "aarch64" | "arm64")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-freebsd-arm64"
         ;;
       *)
         echo "Unsupported architecture: $arch"
@@ -85,13 +91,16 @@ case $os in
   OpenBSD)
     case $arch in
       amd64)
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-openbsd-amd64"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-openbsd-amd64"
         ;;
       "i386" | "i686")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-openbsd-386"
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-openbsd-386"
         ;;
-      "armv7l" | "armv8" | "armv8l" | "aarch64" | "arm64")
-        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/download/output/backtrace-openbsd-arm64"
+      "armv7l" | "armv8" | "armv8l")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-openbsd-arm"
+        ;;
+      "aarch64" | "arm64")
+        wget -O backtrace "${cdn_success_url}https://github.com/oneclickvirt/backtrace/releases/latest/download/backtrace-openbsd-arm64"
         ;;
       *)
         echo "Unsupported architecture: $arch"

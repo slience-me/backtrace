@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 	backtrace "github.com/oneclickvirt/backtrace/bk"
 	"github.com/oneclickvirt/backtrace/model"
 	"github.com/oneclickvirt/backtrace/utils"
+	"github.com/oneclickvirt/basics/network/resolver"
 	. "github.com/oneclickvirt/defaultset"
 )
 
@@ -44,8 +46,15 @@ type cliOptions struct {
 	deep        bool
 	routeTries  int
 	specifiedIP string
+	dnsMode     string
 	timeout     time.Duration
 }
+
+var (
+	backtraceDNSConfigureFn          = resolver.Configure
+	backtraceDNSShutdownFn           = resolver.Shutdown
+	backtraceDNSBootstrapReachableFn = resolver.BootstrapReachable
+)
 
 func newBacktraceFlagSet(options *cliOptions) *flag.FlagSet {
 	set := flag.NewFlagSet("backtrace", flag.ContinueOnError)
@@ -61,6 +70,7 @@ func newBacktraceFlagSet(options *cliOptions) *flag.FlagSet {
 	set.BoolVar(&options.deep, "deep", false, "Fetch geofeed and enable WHOIS fallback")
 	set.IntVar(&options.routeTries, "route-attempts", 3, "Traceroute attempts per target (1-5)")
 	set.DurationVar(&options.timeout, "timeout", 15*time.Second, "Structured or route report timeout")
+	set.StringVar(&options.dnsMode, "dns-mode", "auto", "DNS mode (auto, system, doh, or dot)")
 	return set
 }
 
@@ -75,13 +85,40 @@ func safeGo(wg *sync.WaitGroup, fn func()) {
 	}()
 }
 
-func main() {
-	go func() {
-		resp, err := http.Get("https://hits.spiritlhl.net/backtrace.svg?action=hit&title=Hits&title_bg=%23555555&count_bg=%230eecf8&edge_flat=false")
-		if err == nil && resp != nil && resp.Body != nil {
-			resp.Body.Close()
+func configureBacktraceResolver(ctx context.Context, mode resolver.Mode, preCheck *utils.NetCheckResult) resolver.Status {
+	requested := resolver.ParseMode(string(mode))
+	config := resolver.Config{Mode: requested}
+	status := resolver.Status{Requested: requested, Active: resolver.ModeUnavailable, Reason: "network unavailable"}
+	if preCheck == nil || preCheck.Connected || requested == resolver.ModeDoH || requested == resolver.ModeDoT {
+		return backtraceDNSConfigureFn(ctx, config)
+	}
+	if requested == resolver.ModeAuto {
+		if _, reachable := backtraceDNSBootstrapReachableFn(ctx, config); reachable {
+			return backtraceDNSConfigureFn(ctx, config)
 		}
-	}()
+		status.Reason = "encrypted DNS endpoint unreachable"
+	}
+	backtraceDNSShutdownFn()
+	return status
+}
+
+func promoteEncryptedDNSConnectivity(preCheck *utils.NetCheckResult, status resolver.Status) {
+	if preCheck == nil || preCheck.Connected || (status.Active != resolver.ModeDoH && status.Active != resolver.ModeDoT) {
+		return
+	}
+	preCheck.Connected = true
+	switch status.Stack {
+	case "IPv4":
+		preCheck.HasIPv4 = true
+	case "IPv6":
+		preCheck.HasIPv6 = true
+	}
+	if status.Stack != "" {
+		preCheck.StackType = status.Stack
+	}
+}
+
+func main() {
 	var options cliOptions
 	backtraceFlag := newBacktraceFlagSet(&options)
 	if err := backtraceFlag.Parse(os.Args[1:]); err != nil {
@@ -99,10 +136,31 @@ func main() {
 		fmt.Println(model.BackTraceVersion)
 		return
 	}
+	options.dnsMode = strings.ToLower(strings.TrimSpace(options.dnsMode))
+	if options.dnsMode != "auto" && options.dnsMode != "system" && options.dnsMode != "doh" && options.dnsMode != "dot" {
+		fmt.Fprintln(os.Stderr, "dns-mode must be auto, system, doh, or dot")
+		os.Exit(2)
+	}
 	if err := validateStructuredOptions(options); err != nil {
 		fmt.Fprintln(os.Stderr, sanitizeErrorText(err.Error()))
 		os.Exit(2)
 	}
+	var preCheck *utils.NetCheckResult
+	if !options.jsonOutput && !options.routeJSON {
+		check := utils.CheckPublicAccess(3 * time.Second)
+		preCheck = &check
+	}
+	status := configureBacktraceResolver(context.Background(), resolver.ParseMode(options.dnsMode), preCheck)
+	promoteEncryptedDNSConnectivity(preCheck, status)
+	if status.Active == resolver.ModeDoH || status.Active == resolver.ModeDoT {
+		defer backtraceDNSShutdownFn()
+	}
+	go func() {
+		resp, err := http.Get("https://hits.spiritlhl.net/backtrace.svg?action=hit&title=Hits&title_bg=%23555555&count_bg=%230eecf8&edge_flat=false")
+		if err == nil && resp != nil && resp.Body != nil {
+			resp.Body.Close()
+		}
+	}()
 	if options.jsonOutput {
 		config := bgptools.IPBGPReportConfig{
 			Timeout:             options.timeout,
@@ -146,8 +204,7 @@ func main() {
 			}
 		}
 	}
-	preCheck := utils.CheckPublicAccess(3 * time.Second)
-	if !preCheck.Connected {
+	if preCheck == nil || !preCheck.Connected {
 		fmt.Println(Red("PreCheck IP Type Failed"))
 		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 			fmt.Println("Press Enter to exit...")

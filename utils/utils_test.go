@@ -2,11 +2,15 @@ package utils
 
 import (
 	"fmt"
+	"os"
 	"testing"
 	"time"
 )
 
 func TestCheckPublicAccess(t *testing.T) {
+	if os.Getenv("BACKTRACE_INTEGRATION") != "1" {
+		t.Skip("set BACKTRACE_INTEGRATION=1 to run live public-access checks")
+	}
 	timeout := 3 * time.Second
 	result := CheckPublicAccess(timeout)
 	if result.Connected {

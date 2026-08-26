@@ -1,58 +1,34 @@
 name: CI
 
 on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+permissions:
+  contents: read
+
+concurrency:
+  group: backtrace-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    strategy:
-      matrix:
-        go: ['stable']
-        os: [ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-
-      - name: Setup Go
-        uses: actions/setup-go@v7
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           check-latest: true
-
-      - name: Test
+      - name: Verify module and test source
+        shell: bash
         run: |
-          # Run all tests without generating a combined coverage profile
           set -euo pipefail
-          go test ./...
-
-      - name: Create Tag
-        if: success()
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          TAG="v0.0.11-$(date +'%Y%m%d%H%M%S')"
-          git tag $TAG
-          git push origin $TAG
-          echo "TAG=$TAG" >> $GITHUB_ENV
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update README.md
-        if: success()
-        run: |
-          sed -i "s|go get github.com/oneclickvirt/backtrace@.*|go get github.com/oneclickvirt/backtrace@${TAG}|" README.md
-        env:
-          TAG: ${{ env.TAG }}
-
-      - name: Commit and Push README.md
-        if: success()
-        run: |
-          git add README.md
-          git commit -m "Update README.md with new tag ${TAG}"
-          git push origin main
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          go mod verify
+          go test -race -count=1 ./...
+          go vet ./...
+          go build -o "$RUNNER_TEMP/backtrace" ./cmd
+          git diff --check

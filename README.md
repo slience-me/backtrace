@@ -19,6 +19,7 @@
 - [x] 多次并发路由检测以分析平均多次路由，避免单次路由因网络波动未能准确检测
 - [x] 增加对全平台的编译支持，原版[backtrace](https://github.com/zhanghanyun/backtrace)仅支持linux平台的amd64和arm64架构
 - [x] 兼容额外的ICMP地址获取，若当前目标IP无法查询路由尝试额外的IP地址
+- [x] 在线但本地 DNS 确认缺失时，在当前进程内使用经过固定地址 TLS 查询校验的最快 DoH/DoT 上游；瞬时超时、SERVFAIL 或丢包不会切换系统解析
 
 相关输出和查询结果的说明：[跳转](https://github.com/oneclickvirt/ecs/blob/master/README_NEW_USER.md#%E4%B8%8A%E6%B8%B8%E5%8F%8A%E5%9B%9E%E7%A8%8B%E7%BA%BF%E8%B7%AF%E6%A3%80%E6%B5%8B)
 
@@ -50,7 +51,7 @@ backtrace
 
 进行测试
 
-无环境依赖，理论上适配所有系统和主流架构，更多架构请查看 https://github.com/oneclickvirt/backtrace/releases/tag/output
+无环境依赖，理论上适配所有系统和主流架构，更多架构请查看 https://github.com/oneclickvirt/backtrace/releases
 
 ```
 Usage: backtrace [options]
@@ -59,6 +60,8 @@ Usage: backtrace [options]
         Specify IP address for bgptools
   -ipv6
         Enable ipv6 testing
+  -dns-mode string
+        DNS mode (auto, system, doh, or dot) (default "auto")
   -log
         Enable logging
   -s    Disabe show ip info (default true)
@@ -75,8 +78,12 @@ rm -rf /usr/bin/backtrace
 ## 在Golang中使用
 
 ```
-go get github.com/oneclickvirt/backtrace@v0.0.10-20260702203359
+go get github.com/oneclickvirt/backtrace@v0.0.21
 ```
+
+## DNS 解析回退
+
+`-dns-mode=auto` 是默认值。它会先保留系统 DNS，只有独立探测都确认本地解析器不可用时，才在本次进程内启用内置加密 DNS，并选择实测延迟最低的 DoH 或 DoT 上游。正常响应、NXDOMAIN、短暂超时、SERVFAIL 和丢包都不会被误判为 DNS 缺失。`system` 禁用回退，`doh` 和 `dot` 可显式强制相应协议；不会修改 `/etc/resolv.conf`、`/etc/hosts` 或其他系统配置。
 
 ## 概览图
 
